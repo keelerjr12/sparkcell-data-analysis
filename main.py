@@ -403,6 +403,7 @@ def run_track_selector():
     print("exit run")    
 
 def get_ids_for(grades_df: pd.DataFrame, filter_df: pd.DataFrame) -> pd.DataFrame:
+    grades_df['NAME_NM'] = grades_df['NAME_NM'].fillna("")
     personnel_df = grades_df.groupby(['BASE_RSRC_ID', 'STUDENT_NAME_NM', 'NAME_NM'], as_index=False).count()[['BASE_RSRC_ID', 'STUDENT_NAME_NM', 'NAME_NM']]
     personnel_df = personnel_df.set_index('BASE_RSRC_ID')
     filtered_personnel_df = personnel_df.reset_index().merge(filter_df, how='inner', on=['STUDENT_NAME_NM', 'NAME_NM']).set_index('BASE_RSRC_ID')
@@ -415,6 +416,11 @@ def get_maneuver_grades_for(maneuver_grades_df: pd.DataFrame, personnel: pd.Data
 def get_maneuver_grades_excluding(maneuver_grades_df: pd.DataFrame, personnel: pd.DataFrame) -> pd.DataFrame:
     grades_for_personnel = maneuver_grades_df.loc[~maneuver_grades_df['BASE_RSRC_ID'].isin(personnel.index)]
     return grades_for_personnel
+
+def remove_fake_students(grades_df: pd.DataFrame) -> pd.DataFrame:
+    fake_profiles = ['', 'IFF-A, Dummy', 'Wyatt, Lisa', 'IFF-B, Dummy']
+    grades_df = grades_df[~grades_df['STUDENT_NAME_NM'].isin(fake_profiles)]
+    return grades_df
 
 def remove_no_grade_items(grades_df: pd.DataFrame) -> pd.DataFrame:
     return grades_df.loc[grades_df['ITEM_GRADE_LABEL'] != 'NG']
@@ -490,30 +496,42 @@ def remap_iff_items(grades_df: pd.DataFrame) -> pd.DataFrame:
     return grades_df
 
 def run_upt_iff_analysis() -> None:
+    # read in IFF grades after a 6/18/2019 to keep upt 2.5/2.0/enjjpt consistency
     iff_maneuver_grades_df = pd.read_csv(IFF_MANEUVER_GRADE_FILENAME)
-    upt_2_5_students_df = pd.read_csv('data/upt_2_5_students.csv')
+    iff_maneuver_grades_df = iff_maneuver_grades_df.loc[pd.to_datetime(iff_maneuver_grades_df['START_DATE_TIME_DT']) >= pd.Timestamp(2019, 6, 18)]
+    upt_2_5_students_df = pd.read_csv('data/upt_2_5_students.csv').fillna("")
+    upt_2_0_students_df = pd.read_csv('data/upt_2_0_students.csv').fillna("")
 
+    iff_maneuver_grades_df = remove_fake_students(iff_maneuver_grades_df)
     iff_maneuver_grades_df = remove_no_grade_items(iff_maneuver_grades_df)
     iff_maneuver_grades_df = remap_iff_sorties(iff_maneuver_grades_df)
     iff_maneuver_grades_df = remap_iff_items(iff_maneuver_grades_df)
 
     upt_2_5_students_df = get_ids_for(iff_maneuver_grades_df, upt_2_5_students_df)
     upt_2_5_grades_df = get_maneuver_grades_for(iff_maneuver_grades_df, upt_2_5_students_df)
-
     average_upt_2_5_grades_df = upt_2_5_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
-    average_upt_2_5_grades_df.to_csv('upt_2_5_output.csv')
+    count_upt_2_5_grades_df = upt_2_5_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
+    average_upt_2_5_grades_df.to_csv('upt_2_5_average.csv')
+    count_upt_2_5_grades_df.to_csv('upt_2_5_count.csv')
 
-    non_2_5_grades_df = get_maneuver_grades_excluding(iff_maneuver_grades_df, upt_2_5_students_df)
-    #print(non_2_5_grades_df)
-    #items = non_2_5_grades_df[['SYL_EVNT_ITM_NAME_NM']].drop_duplicates().sort_values(by='SYL_EVNT_ITM_NAME_NM')
-    #print(items)
-    #items.to_csv('items.csv')
-    average_non_2_5_grades_df = non_2_5_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
-    average_non_2_5_grades_df.to_csv('non_upt_2_5_output.csv')
+    upt_2_0_students_df = get_ids_for(iff_maneuver_grades_df, upt_2_0_students_df)
+    upt_2_0_grades_df = get_maneuver_grades_for(iff_maneuver_grades_df, upt_2_0_students_df)
+    average_upt_2_0_grades_df = upt_2_0_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
+    count_upt_2_0_grades_df = upt_2_0_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
+    average_upt_2_0_grades_df.to_csv('upt_2_0_average.csv')
+    count_upt_2_0_grades_df.to_csv('upt_2_0_count.csv')
 
+    non_enjjpt_students_df = pd.concat([upt_2_5_students_df, upt_2_0_students_df])
+    enjjpt_grades_df = get_maneuver_grades_excluding(iff_maneuver_grades_df, non_enjjpt_students_df)
+    average_enjjpt_grades_df = enjjpt_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
+    count_enjjpt_grades_df = enjjpt_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
+    average_enjjpt_grades_df.to_csv('enjjpt_average.csv')
+    count_enjjpt_grades_df.to_csv('enjjpt_count.csv')
 
-    print(average_non_2_5_grades_df)
+    print(enjjpt_grades_df)
+    print(average_upt_2_5_grades_df)
+    print(average_upt_2_0_grades_df)
 
 if __name__ == "__main__":
-    run_track_selector()
-    #run_upt_iff_analysis()
+    #run_track_selector()
+    run_upt_iff_analysis()
