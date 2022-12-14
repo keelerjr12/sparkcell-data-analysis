@@ -162,11 +162,11 @@ def compute_gradesheet_averages(grades_df: pd.DataFrame, airframe: str):
     avg_grades_per_student_df = avg_grades_per_student_df.pivot(index="BASE_RSRC_ID", columns="SYL_EVNT_ITM_NAME_NM", values="ITEM_GRADE_QY")
     avg_grades_per_student_df.index.names = ['BASE_RSRC_ID']
 
-    # get form checkride scores (F4390)
-    if (airframe == 'T6') or (airframe == 'T-6'):
-        for event in ['F4390', 'I4390']:
-            grades_for_event_df = get_grade_and_pass_rate_for_event(grades_wo_ng_df, event)
-            avg_grades_per_student_df = pd.merge(avg_grades_per_student_df, grades_for_event_df, how='inner', on='BASE_RSRC_ID')
+   # # get form checkride scores (F4390)
+   # if (airframe == 'T6') or (airframe == 'T-6'):
+   #     for event in ['F4390', 'I4390']:
+   #         grades_for_event_df = get_grade_and_pass_rate_for_event(grades_wo_ng_df, event)
+   #         avg_grades_per_student_df = pd.merge(avg_grades_per_student_df, grades_for_event_df, how='inner', on='BASE_RSRC_ID')
 
     perc = 80.0
     min_count = int((perc/100) * avg_grades_per_student_df.shape[0] + 1)
@@ -196,6 +196,25 @@ def compute_gradesheet_averages(grades_df: pd.DataFrame, airframe: str):
     #exit()
     #return output_df 
 
+def compute_gradesheet_counts(grades_df: pd.DataFrame, airframe: str):
+    grades_wo_ng_df = grades_df[grades_df.ITEM_GRADE_LABEL != 'NG']
+
+    replaced_grades_df = grades_wo_ng_df # item_grades_df
+
+    if (airframe == 'T6') or (airframe == 'T-6'):
+        replaced_grades_df = t6_replace(grades_wo_ng_df)
+    elif (airframe == 'T38') or (airframe == 'T-38'):
+        replaced_grades_df = t38_replace(grades_wo_ng_df)
+
+    counts_grades_per_student_df = replaced_grades_df.groupby(["BASE_RSRC_ID", "SYL_EVNT_ITM_NAME_NM"], as_index=False).count()
+    counts_grades_per_student_df = counts_grades_per_student_df.pivot(index="BASE_RSRC_ID", columns="SYL_EVNT_ITM_NAME_NM", values="ITEM_GRADE_QY")
+    counts_grades_per_student_df.index.names = ['BASE_RSRC_ID']
+
+    perc = 80.0
+    min_count = int((perc/100) * counts_grades_per_student_df.shape[0] + 1)
+    counts_grades_per_student_df = counts_grades_per_student_df.dropna(axis= 1, thresh=min_count)
+
+    return counts_grades_per_student_df
 
 def compute_mass(grades_df: pd.DataFrame, airframe: str):
     grades_wo_ng_df = grades_df[grades_df.ITEM_GRADE_LABEL != 'NG']
@@ -331,32 +350,48 @@ def run_track_selector():
     print(t38_mass_df)
     print(iff_mass_df)
 
+    # F4390 and I4390 -- move to function
+    grades_wo_ng_df = t6_maneuver_grades_df[t6_maneuver_grades_df.ITEM_GRADE_LABEL != 'NG']
+    grades_for_event_df = get_grade_and_pass_rate_for_event(grades_wo_ng_df, 'F4390')
+    t6_averages_df = pd.merge(t6_averages_df, grades_for_event_df, how='inner', on='BASE_RSRC_ID')
+    grades_for_event_df = get_grade_and_pass_rate_for_event(grades_wo_ng_df, 'I4390')
+    t6_averages_df = pd.merge(t6_averages_df, grades_for_event_df, how='inner', on='BASE_RSRC_ID')
+
+    # add counts
+    counts_for_event_df = compute_gradesheet_counts(t6_maneuver_grades_df, 'T6')
+    t6_averages_df = pd.merge(t6_averages_df, counts_for_event_df, how='inner', on='BASE_RSRC_ID', suffixes=['_AVERAGES', '_COUNTS'])
+
     tims_mass_df = pd.read_csv('data/mass_data.csv')
-    academics_df = tims_mass_df[['BASE_RSRC_ID', 'NAME_NM', 'SYL_OVRAL_ST_NAME_NM', 'OVRAL_ST_EFF_DATE_TIME_DT', 'MERIT_RANK_SYS_CATG_NAME','RAW_SCORE_DV']]
-    academics_df = academics_df[(academics_df['MERIT_RANK_SYS_CATG_NAME'] == 'Academics T-Score') & (academics_df['SYL_OVRAL_ST_NAME_NM'] == 'Complete') & (academics_df['NAME_NM'].str.contains('T-6'))]
+    tims_mass_df = tims_mass_df[['BASE_RSRC_ID', 'NAME_NM', 'SYL_OVRAL_ST_NAME_NM', 'OVRAL_ST_EFF_DATE_TIME_DT', 'MERIT_RANK_SYS_CATG_NAME','RAW_SCORE_DV']]
+
+    academics_df = tims_mass_df[(tims_mass_df['MERIT_RANK_SYS_CATG_NAME'] == 'Academics T-Score') & (tims_mass_df['SYL_OVRAL_ST_NAME_NM'] == 'Complete') & (tims_mass_df['NAME_NM'].str.contains('T-6'))]
     academics_df = academics_df[['BASE_RSRC_ID', 'RAW_SCORE_DV']]
     academics_df = academics_df.set_index('BASE_RSRC_ID')
     academics_df = academics_df.rename(columns={'RAW_SCORE_DV': 'T6 ACADEMICS'})
-    print(academics_df)
     t6_averages_df = pd.merge(t6_averages_df, academics_df, how='inner', on='BASE_RSRC_ID')
-    print(t6_averages_df)
 
-   # t6_mass_df = get_mass('T6', t6_maneuver_grades_df)
-   # combined_df = pd.merge(t6_mass_df, t38_mass_df, how='inner', on='BASE_RSRC_ID')
-   # print(combined_df)
-   # combined_df.plot(kind='scatter', x='T6 MASS', y='T38 MASS')
-   # plt.show()
-   # exit()
+    flt_cc_ranking_df = tims_mass_df[(tims_mass_df['MERIT_RANK_SYS_CATG_NAME'] == 'Flight Commander Ranking T-Score') & (tims_mass_df['SYL_OVRAL_ST_NAME_NM'] == 'Complete') & (tims_mass_df['NAME_NM'].str.contains('T-6'))]
+    flt_cc_ranking_df = flt_cc_ranking_df[['BASE_RSRC_ID', 'RAW_SCORE_DV']]
+    flt_cc_ranking_df = flt_cc_ranking_df.set_index('BASE_RSRC_ID')
+    flt_cc_ranking_df = flt_cc_ranking_df.rename(columns={'RAW_SCORE_DV': 'FLT CC RANKING'})
+    flt_cc_ranking_df['FLT CC RANKING'] = np.where(flt_cc_ranking_df['FLT CC RANKING'] == 0.0, np.nan, flt_cc_ranking_df['FLT CC RANKING'])
+    t6_averages_df = pd.merge(t6_averages_df, flt_cc_ranking_df, how='inner', on='BASE_RSRC_ID')
 
     t38_mass_df = get_weighted_mass('T38', t38_averages_df, iff_mass_df)
-    merged_df = pd.DataFrame.merge(t6_averages_df, t38_mass_df, on='BASE_RSRC_ID') #may delete left
+    merged_df = pd.DataFrame.merge(t6_averages_df, t38_mass_df, on='BASE_RSRC_ID')
     merged_df = merged_df.sort_values('T38 MASS', ascending=False).reset_index()
     corr_df = merged_df.corr()[['T38 MASS']]
     corr_df = corr_df.sort_values('T38 MASS', ascending=False)
     corr_df.to_csv('corr.csv')
-    exit()
 
-    perc = 50.0
+    #t6_mass_df = get_mass('T6', t6_maneuver_grades_df)
+    #combined_df = pd.merge(t6_averages_df, t38_mass_df, how='inner', on='BASE_RSRC_ID')
+    #print(combined_df)
+    #combined_df.plot(kind='scatter', x='T6 ACADEMICS', y='T38 MASS')
+    #plt.show()
+    #exit()
+
+    perc = 15.0
     merged_df['Class'] = np.where(merged_df.index <= ((perc/100)*len(merged_df.index)), 1, 0)
 
     merged_df = merged_df.sort_values('T38 MASS', ascending=False)
@@ -381,13 +416,13 @@ def run_track_selector():
     )
 
     params = {
-        #"features__pca__n_components": np.arange(1, 3),
+        "features__pca__n_components": np.arange(1, 3),
         #"features__select__score_func": [f_classif],
-        "features__select__k": np.arange(1, 8)
+        "features__select__k": np.arange(1, 50)
     }
 
     log_params = params.copy()
-    log_params['classifier__C'] = np.arange(.1, 1.1, .2)
+    log_params['classifier__C'] = np.arange(.05, 1.0, .05)
 
     svc_params = log_params.copy()
     svc_params['classifier__gamma'] = ['auto', 'scale']
@@ -395,11 +430,11 @@ def run_track_selector():
     classifiers = [
         #(SVC(), svc_params),
         #(LinearSVC(max_iter=100000), log_params),
-        (LogisticRegression(), log_params),
-        #(RandomForestClassifier(), params),
+        (LogisticRegression(max_iter=1000), log_params),
+        (RandomForestClassifier(), params),
         (KNeighborsClassifier(), params),
         #(DecisionTreeClassifier(),params),
-        (GaussianNB(), params),
+        #(GaussianNB(priors=[.85, .15]), params),
         #(AdaBoostClassifier(), params),
         #(GaussianProcessClassifier(1.0 * RBF(1.0)), params),
         #(MLPClassifier(max_iter=5000), params)
