@@ -1,7 +1,8 @@
 import os
 from pathlib import Path
-import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
 
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import FeatureUnion, Pipeline 
@@ -167,7 +168,7 @@ def compute_gradesheet_averages(grades_df: pd.DataFrame, airframe: str):
             grades_for_event_df = get_grade_and_pass_rate_for_event(grades_wo_ng_df, event)
             avg_grades_per_student_df = pd.merge(avg_grades_per_student_df, grades_for_event_df, how='inner', on='BASE_RSRC_ID')
 
-    perc = 95.0
+    perc = 80.0
     min_count = int((perc/100) * avg_grades_per_student_df.shape[0] + 1)
     avg_grades_per_student_df = avg_grades_per_student_df.dropna(axis= 1, thresh=min_count)
 
@@ -242,10 +243,24 @@ def fit_score_print(preprocessor, classifier, params, x_train, y_train, x_test, 
 
     return (clf.best_score_, pred_probs_df)
 
-def get_averages(airframe: str) -> pd.DataFrame:
+def remove_extraneous_duplicated_students(grades_df: pd.DataFrame) -> pd.DataFrame:
+    students_df = grades_df[['BASE_RSRC_ID', 'STUDENT_NAME_NM', 'NAME_NM']]
+    students_df = students_df.set_index('BASE_RSRC_ID')
+    students_df = students_df[~students_df.index.isin([1160023198, 1160037136, 1160020542, 1160020530, 1160023199, 1160023199, 1160037236])]
+    students_df = students_df[~students_df.index.duplicated(keep='first')]
+
+    grades_df = grades_df[grades_df['BASE_RSRC_ID'].isin(students_df.index)]
+
+    return grades_df
+
+def read_in_maneuver_grades(airframe: str) -> pd.DataFrame:
+    grades_df = pd.read_csv('data/' + airframe.lower() + '_maneuver_grades.csv')
+    grades_df = remove_extraneous_duplicated_students(grades_df)
+    return grades_df
+
+def get_averages(airframe: str, grades_df: pd.DataFrame) -> pd.DataFrame:
     CACHE_FOLDER = 'cache'
     CACHE_FILEPATH = CACHE_FOLDER + '/' + airframe.lower() + '_averages.csv'
-    MANEUVER_GRADES_FILE = 'data/' + airframe.lower() + '_maneuver_grades.csv'
 
     if (not os.path.exists(CACHE_FOLDER)):
         os.makedirs(CACHE_FOLDER)
@@ -254,18 +269,16 @@ def get_averages(airframe: str) -> pd.DataFrame:
     averages_df = pd.DataFrame()
 
     if (not averages_file.exists()):
-        maneuver_grades_df = pd.read_csv(MANEUVER_GRADES_FILE)
-        averages_df = compute_gradesheet_averages(maneuver_grades_df, airframe)
+        averages_df = compute_gradesheet_averages(grades_df, airframe)
         averages_df.to_csv(CACHE_FILEPATH)
     else:
         averages_df = pd.read_csv(CACHE_FILEPATH, index_col='BASE_RSRC_ID')
 
     return averages_df
 
-def get_mass(airframe: str) -> pd.DataFrame:
+def get_mass(airframe: str, grades_df: pd.DataFrame) -> pd.DataFrame:
     CACHE_FOLDER = 'cache'
     CACHE_FILEPATH = CACHE_FOLDER + '/' + airframe.lower() + '_mass.csv'
-    MANEUVER_GRADES_FILE = 'data/' + airframe.lower() + '_maneuver_grades.csv'
 
     if (not os.path.exists(CACHE_FOLDER)):
         os.makedirs(CACHE_FOLDER)
@@ -274,43 +287,76 @@ def get_mass(airframe: str) -> pd.DataFrame:
     mass_df = pd.DataFrame()
 
     if (not averages_file.exists()):
-        maneuver_grades_df = pd.read_csv(MANEUVER_GRADES_FILE)
-        mass_df = compute_mass(maneuver_grades_df, airframe)
+        mass_df = compute_mass(grades_df, airframe)
         mass_df.to_csv(CACHE_FILEPATH)
     else:
         mass_df = pd.read_csv(CACHE_FILEPATH)
 
     return mass_df
 
-def run_track_selector():
-    print("enter run")
-    
-    t6_averages_df = get_averages('T6')
-    t38_averages_df = get_averages('T38')
-    t38_mass_df = get_mass('T38')
-    iff_mass_df = get_mass('IFF')
-
-    print(t6_averages_df)
-    print(t38_averages_df)
-    print(t38_mass_df)
-    print(iff_mass_df)
-
+def get_weighted_correlations(t38_averages_df: pd.DataFrame, iff_mass_df: pd.DataFrame) -> pd.DataFrame:
     all_mass_df = pd.merge(t38_averages_df, iff_mass_df, how='inner', on='BASE_RSRC_ID')
     t38_iff_corrs = all_mass_df.corr()['IFF MASS']
     t38_iff_corrs = t38_iff_corrs.drop('IFF MASS')
     total_weight = t38_iff_corrs.sum()
     t38_iff_corr_weights = t38_iff_corrs / total_weight
 
-    t38_student_weighted_averages = t38_averages_df * t38_iff_corr_weights
-    t38_student_weighted_averages = t38_student_weighted_averages.sum(axis=1)
-    t38_mass_df = t38_student_weighted_averages
-    t38_mass_df = t38_mass_df.rename('T38 MASS')
+    return t38_iff_corr_weights
 
-    merged_df = pd.DataFrame.merge(t6_averages_df, t38_mass_df, on='BASE_RSRC_ID')
+def get_weighted_mass(airframe: str, averages_df: pd.DataFrame, mass_df: pd.DataFrame) -> pd.DataFrame:
+    corr_weights_df = get_weighted_correlations(averages_df, mass_df)
 
+    student_weighted_averages = averages_df * corr_weights_df
+    student_weighted_averages = student_weighted_averages.sum(axis=1)
+    weighted_mass_df = student_weighted_averages
+    weighted_mass_df = weighted_mass_df.rename(airframe.upper() + ' MASS')
+
+    return weighted_mass_df
+
+def run_track_selector():
+    print("enter run")
+
+    t6_maneuver_grades_df = read_in_maneuver_grades('T6')
+    t38_maneuver_grades_df = read_in_maneuver_grades('T38')
+    iff_maneuver_grades_df = read_in_maneuver_grades('IFF')
+
+    t6_averages_df = get_averages('T6', t6_maneuver_grades_df)
+    t38_averages_df = get_averages('T38', t38_maneuver_grades_df)
+
+    t38_mass_df = get_mass('T38', t38_maneuver_grades_df)
+    iff_mass_df = get_mass('IFF', iff_maneuver_grades_df)
+
+    print(t6_averages_df)
+    print(t38_averages_df)
+    print(t38_mass_df)
+    print(iff_mass_df)
+
+    tims_mass_df = pd.read_csv('data/mass_data.csv')
+    academics_df = tims_mass_df[['BASE_RSRC_ID', 'NAME_NM', 'SYL_OVRAL_ST_NAME_NM', 'OVRAL_ST_EFF_DATE_TIME_DT', 'MERIT_RANK_SYS_CATG_NAME','RAW_SCORE_DV']]
+    academics_df = academics_df[(academics_df['MERIT_RANK_SYS_CATG_NAME'] == 'Academics T-Score') & (academics_df['SYL_OVRAL_ST_NAME_NM'] == 'Complete') & (academics_df['NAME_NM'].str.contains('T-6'))]
+    academics_df = academics_df[['BASE_RSRC_ID', 'RAW_SCORE_DV']]
+    academics_df = academics_df.set_index('BASE_RSRC_ID')
+    academics_df = academics_df.rename(columns={'RAW_SCORE_DV': 'T6 ACADEMICS'})
+    print(academics_df)
+    t6_averages_df = pd.merge(t6_averages_df, academics_df, how='inner', on='BASE_RSRC_ID')
+    print(t6_averages_df)
+
+   # t6_mass_df = get_mass('T6', t6_maneuver_grades_df)
+   # combined_df = pd.merge(t6_mass_df, t38_mass_df, how='inner', on='BASE_RSRC_ID')
+   # print(combined_df)
+   # combined_df.plot(kind='scatter', x='T6 MASS', y='T38 MASS')
+   # plt.show()
+   # exit()
+
+    t38_mass_df = get_weighted_mass('T38', t38_averages_df, iff_mass_df)
+    merged_df = pd.DataFrame.merge(t6_averages_df, t38_mass_df, on='BASE_RSRC_ID') #may delete left
     merged_df = merged_df.sort_values('T38 MASS', ascending=False).reset_index()
+    corr_df = merged_df.corr()[['T38 MASS']]
+    corr_df = corr_df.sort_values('T38 MASS', ascending=False)
+    corr_df.to_csv('corr.csv')
+    exit()
 
-    perc = 15.0
+    perc = 50.0
     merged_df['Class'] = np.where(merged_df.index <= ((perc/100)*len(merged_df.index)), 1, 0)
 
     merged_df = merged_df.sort_values('T38 MASS', ascending=False)
@@ -349,14 +395,14 @@ def run_track_selector():
     classifiers = [
         #(SVC(), svc_params),
         #(LinearSVC(max_iter=100000), log_params),
-        #(LogisticRegression(), log_params),
+        (LogisticRegression(), log_params),
         #(RandomForestClassifier(), params),
         (KNeighborsClassifier(), params),
         #(DecisionTreeClassifier(),params),
-        #(GaussianNB(), params),
+        (GaussianNB(), params),
         #(AdaBoostClassifier(), params),
-        (GaussianProcessClassifier(1.0 * RBF(1.0)), params),
-        (MLPClassifier(max_iter=5000), params)
+        #(GaussianProcessClassifier(1.0 * RBF(1.0)), params),
+        #(MLPClassifier(max_iter=5000), params)
     ]
 
     all_predictions = pd.DataFrame()
@@ -549,5 +595,5 @@ def run_upt_iff_analysis() -> None:
     print("analysis done...")
 
 if __name__ == "__main__":
-    #run_track_selector()
-    run_upt_iff_analysis()
+    run_track_selector()
+    #run_upt_iff_analysis()
