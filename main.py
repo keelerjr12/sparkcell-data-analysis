@@ -26,6 +26,7 @@ from sklearn.svm import SVC, LinearSVC
 from sklearn.naive_bayes import BernoulliNB, CategoricalNB, GaussianNB
 
 MASS_FILENAME = 'mass.csv'
+OUTPUT_DIR = './output/'
 T6_MANEUVER_GRADE_FILENAME = './data/t6_maneuver_grades.csv'
 T38_MANEUVER_GRADE_FILENAME = './data/t38_maneuver_grades.csv'
 IFF_MANEUVER_GRADE_FILENAME = './data/iff_maneuver_grades.csv'
@@ -413,10 +414,6 @@ def get_maneuver_grades_for(maneuver_grades_df: pd.DataFrame, personnel: pd.Data
     grades_for_personnel = maneuver_grades_df.loc[maneuver_grades_df['BASE_RSRC_ID'].isin(personnel.index)]
     return grades_for_personnel
 
-def get_maneuver_grades_excluding(maneuver_grades_df: pd.DataFrame, personnel: pd.DataFrame) -> pd.DataFrame:
-    grades_for_personnel = maneuver_grades_df.loc[~maneuver_grades_df['BASE_RSRC_ID'].isin(personnel.index)]
-    return grades_for_personnel
-
 def remove_fake_students(grades_df: pd.DataFrame) -> pd.DataFrame:
     fake_profiles = ['', 'IFF-A, Dummy', 'Wyatt, Lisa', 'IFF-B, Dummy']
     grades_df = grades_df[~grades_df['STUDENT_NAME_NM'].isin(fake_profiles)]
@@ -495,7 +492,29 @@ def remap_iff_items(grades_df: pd.DataFrame) -> pd.DataFrame:
     grades_df['SYL_EVNT_ITM_NAME_NM'] = grades_df['SYL_EVNT_ITM_NAME_NM'].map(lambda x: x if (x not in item_mapping) else item_mapping[x])
     return grades_df
 
+def get_students(grades_df: pd.DataFrame) -> pd.DataFrame:
+    students_df = grades_df[['BASE_RSRC_ID', 'STUDENT_NAME_NM', 'NAME_NM']]
+    students_df = students_df.drop_duplicates()
+    students_df = students_df.set_index('BASE_RSRC_ID')
+
+    return students_df
+
+def get_maneuver_averages_and_counts(grades_df: pd.DataFrame, student_ids_df: pd.DataFrame):
+    filtered_grades_df = get_maneuver_grades_for(grades_df, student_ids_df)
+    filtered_grades_mean_df = filtered_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean(numeric_only=True)['ITEM_GRADE_QY']
+    filtered_grades_count_df = filtered_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
+
+    return filtered_grades_mean_df, filtered_grades_count_df
+
+def get_students_on_formation_rides(grades_df: pd.DataFrame) -> pd.DataFrame:
+    students_on_f_rides_df = grades_df.loc[grades_df['SYL_EVNT_NAME_NM'].isin(['F-1', 'F-2', 'F-3', 'F-4'])][['BASE_RSRC_ID', 'STUDENT_NAME_NM', 'NAME_NM']]
+    students_on_f_rides_df = students_on_f_rides_df.drop_duplicates()
+    students_on_f_rides_df = students_on_f_rides_df.set_index('BASE_RSRC_ID')
+    return students_on_f_rides_df
+    
 def run_upt_iff_analysis() -> None:
+    print("starting analysis...")
+
     # read in IFF grades after a 6/18/2019 to keep upt 2.5/2.0/enjjpt consistency
     iff_maneuver_grades_df = pd.read_csv(IFF_MANEUVER_GRADE_FILENAME)
     iff_maneuver_grades_df = iff_maneuver_grades_df.loc[pd.to_datetime(iff_maneuver_grades_df['START_DATE_TIME_DT']) >= pd.Timestamp(2019, 6, 18)]
@@ -507,30 +526,27 @@ def run_upt_iff_analysis() -> None:
     iff_maneuver_grades_df = remap_iff_sorties(iff_maneuver_grades_df)
     iff_maneuver_grades_df = remap_iff_items(iff_maneuver_grades_df)
 
-    upt_2_5_students_df = get_ids_for(iff_maneuver_grades_df, upt_2_5_students_df)
-    upt_2_5_grades_df = get_maneuver_grades_for(iff_maneuver_grades_df, upt_2_5_students_df)
-    average_upt_2_5_grades_df = upt_2_5_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
-    count_upt_2_5_grades_df = upt_2_5_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
-    average_upt_2_5_grades_df.to_csv('upt_2_5_average.csv')
-    count_upt_2_5_grades_df.to_csv('upt_2_5_count.csv')
+    upt_2_5_students_ids_df = get_ids_for(iff_maneuver_grades_df, upt_2_5_students_df)
 
-    upt_2_0_students_df = get_ids_for(iff_maneuver_grades_df, upt_2_0_students_df)
-    upt_2_0_grades_df = get_maneuver_grades_for(iff_maneuver_grades_df, upt_2_0_students_df)
-    average_upt_2_0_grades_df = upt_2_0_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
-    count_upt_2_0_grades_df = upt_2_0_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
-    average_upt_2_0_grades_df.to_csv('upt_2_0_average.csv')
-    count_upt_2_0_grades_df.to_csv('upt_2_0_count.csv')
+    form_students_df = get_students_on_formation_rides(iff_maneuver_grades_df)
+    upt_2_0_students_ids_df = form_students_df.loc[~form_students_df.index.isin(pd.concat([upt_2_5_students_ids_df]).index)]
 
-    non_enjjpt_students_df = pd.concat([upt_2_5_students_df, upt_2_0_students_df])
-    enjjpt_grades_df = get_maneuver_grades_excluding(iff_maneuver_grades_df, non_enjjpt_students_df)
-    average_enjjpt_grades_df = enjjpt_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).mean()['ITEM_GRADE_QY']
-    count_enjjpt_grades_df = enjjpt_grades_df.groupby(['SYL_EVNT_NAME_NM', 'SYL_EVNT_ITM_NAME_NM']).count()['ITEM_GRADE_QY']
-    average_enjjpt_grades_df.to_csv('enjjpt_average.csv')
-    count_enjjpt_grades_df.to_csv('enjjpt_count.csv')
+    all_students_df = get_students(iff_maneuver_grades_df)
+    enjjpt_students_df = all_students_df.loc[~all_students_df.index.isin(pd.concat([upt_2_5_students_ids_df, upt_2_0_students_ids_df]).index)]
+    enjjpt_students_ids_df = get_ids_for(iff_maneuver_grades_df, enjjpt_students_df)
 
-    print(enjjpt_grades_df)
-    print(average_upt_2_5_grades_df)
-    print(average_upt_2_0_grades_df)
+    all_students_df = {
+        'upt_2_0': upt_2_0_students_ids_df,
+        'upt_2_5': upt_2_5_students_ids_df,
+        'enjjpt': enjjpt_students_ids_df
+    }
+
+    for key, students_ids_df in all_students_df.items():
+        averages_df, counts_df = get_maneuver_averages_and_counts(iff_maneuver_grades_df, students_ids_df)
+        averages_df.to_csv(OUTPUT_DIR + key + '_averages.csv')
+        counts_df.to_csv(OUTPUT_DIR + key + '_counts.csv')
+
+    print("analysis done...")
 
 if __name__ == "__main__":
     #run_track_selector()
