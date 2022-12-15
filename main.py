@@ -9,7 +9,7 @@ from sklearn.pipeline import FeatureUnion, Pipeline
 
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, PolynomialFeatures
 
 from sklearn.model_selection import GridSearchCV
 from sklearn.decomposition import PCA
@@ -25,6 +25,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC, LinearSVC
 from sklearn.naive_bayes import BernoulliNB, CategoricalNB, GaussianNB
+from sklearn.ensemble import BaggingClassifier
 
 MASS_FILENAME = 'mass.csv'
 OUTPUT_DIR = './output/'
@@ -335,16 +336,21 @@ def get_weighted_mass(airframe: str, averages_df: pd.DataFrame, mass_df: pd.Data
 def run_track_selector():
     print("enter run")
 
+    print('1')
+
     t6_maneuver_grades_df = read_in_maneuver_grades('T6')
     t38_maneuver_grades_df = read_in_maneuver_grades('T38')
     iff_maneuver_grades_df = read_in_maneuver_grades('IFF')
+    print('2')
 
     t6_averages_df = get_averages('T6', t6_maneuver_grades_df)
     t38_averages_df = get_averages('T38', t38_maneuver_grades_df)
 
+    print('3')
     t38_mass_df = get_mass('T38', t38_maneuver_grades_df)
     iff_mass_df = get_mass('IFF', iff_maneuver_grades_df)
 
+    print('4')
     print(t6_averages_df)
     print(t38_averages_df)
     print(t38_mass_df)
@@ -382,17 +388,18 @@ def run_track_selector():
     merged_df = merged_df.sort_values('T38 MASS', ascending=False).reset_index()
     corr_df = merged_df.corr()[['T38 MASS']]
     corr_df = corr_df.sort_values('T38 MASS', ascending=False)
-    corr_df.to_csv('corr.csv')
-
-    #t6_mass_df = get_mass('T6', t6_maneuver_grades_df)
-    #combined_df = pd.merge(t6_averages_df, t38_mass_df, how='inner', on='BASE_RSRC_ID')
-    #print(combined_df)
-    #combined_df.plot(kind='scatter', x='T6 ACADEMICS', y='T38 MASS')
-    #plt.show()
-    #exit()
+    #corr_df.to_csv('corr.csv')
 
     perc = 15.0
     merged_df['Class'] = np.where(merged_df.index <= ((perc/100)*len(merged_df.index)), 1, 0)
+
+   # t6_mass_df = get_mass('T6', t6_maneuver_grades_df)
+   # combined_df = pd.merge(merged_df, t6_mass_df, how='inner', on='BASE_RSRC_ID')
+   # print(combined_df)
+   # combined_df.to_csv('combined.csv')
+   # combined_df.plot(kind='scatter', x='T6 MASS', y='T38 MASS', c="Class", colormap='Set1')
+   # plt.show()
+   # exit()
 
     merged_df = merged_df.sort_values('T38 MASS', ascending=False)
     x_df = merged_df.drop(columns=['T38 MASS', 'BASE_RSRC_ID', 'Class'])
@@ -416,28 +423,28 @@ def run_track_selector():
     )
 
     params = {
-        "features__pca__n_components": np.arange(1, 3),
+        #"features__pca__n_components": np.arange(1, 2),
         #"features__select__score_func": [f_classif],
-        "features__select__k": np.arange(1, 50)
+        "features__select__k": np.arange(1, 60)
     }
 
     log_params = params.copy()
-    log_params['classifier__C'] = np.arange(.05, 1.0, .05)
+    log_params['classifier__C'] = np.arange(.1, 1.0, .1)
 
     svc_params = log_params.copy()
     svc_params['classifier__gamma'] = ['auto', 'scale']
 
     classifiers = [
-        #(SVC(), svc_params),
+        #(SVC(probability=True), svc_params),
         #(LinearSVC(max_iter=100000), log_params),
         (LogisticRegression(max_iter=1000), log_params),
-        (RandomForestClassifier(), params),
-        (KNeighborsClassifier(), params),
-        #(DecisionTreeClassifier(),params),
+        (RandomForestClassifier(oob_score=True, n_jobs=-1), params),
+        (BaggingClassifier(KNeighborsClassifier(), max_features=.5, max_samples=.5), params),
         #(GaussianNB(priors=[.85, .15]), params),
         #(AdaBoostClassifier(), params),
         #(GaussianProcessClassifier(1.0 * RBF(1.0)), params),
-        #(MLPClassifier(max_iter=5000), params)
+        #(MLPClassifier(max_iter=5000), params),
+        #(HistGradientBoostingClassifier(), params)
     ]
 
     all_predictions = pd.DataFrame()
